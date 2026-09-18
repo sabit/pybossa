@@ -1,6 +1,6 @@
 .PHONY: test
 test:
-	nosetests test/
+	uv run nosetests test/
 
 .PHONY: release
 release:

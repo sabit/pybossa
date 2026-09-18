@@ -1,10 +1,25 @@
-from setuptools import setup, find_packages
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
 
-with open("pybossa/version.txt") as f:
-    version = f.readline()
-__version__ = version.rstrip()
-
-requirements = [
+[project]
+name = "pybossa"
+version = "4.0.2"
+description = "Open Source CrowdSourcing framework"
+readme = "README.md"
+requires-python = ">=3.8,<3.9"
+license = {text = "AGPL-3.0-or-later"}
+authors = [{name = "Scifabric LTD", email = "info@scifabric.com"}]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.8",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
     "alembic==0.9.10",
     "arrow==0.12.1",
     "asn1crypto==0.24.0",
@@ -140,34 +155,11 @@ requirements = [
     "email_validator==1.1.1",
 ]
 
-setup(
-    name="pybossa",
-    version=__version__,
-    packages=find_packages(),
-    install_requires=requirements,
-    # only needed when installing directly from setup.py (PyPi, eggs?) and pointing to e.g. a git repo.
-    # Keep in mind that dependency_links are not used when installing with requirements.txt
-    # and need to be added redundant to requirements.txt in this case!
-    # Example:
-    # dependency_links = [
-    #     'git+git@github.com:Scifabric/pybossa.git@b8ab2ef199e82ca417d470bbed916c7b8dbda4d4#egg=pybossa'
-    # ]
-    # metadata for upload to PyPI
-    author="Scifabric LTD",
-    author_email="info@scifabric.com",
-    description="Open Source CrowdSourcing framework",
-    long_description="""PYBOSSA is the ultimate crowdsourcing framework to analyze or enrich data that can't be processed by machines alone.""",
-    license="AGPLv3",
-    url="http://pybossa.com",
-    download_url="https://github.com/Scifabric/pybossa",
-    include_package_data=True,
-    classifiers=[
-        "Development Status :: 5 - Production/Stable",
-        "Environment :: Console",
-        "Intended Audience :: Developers",
-        "License :: OSI Approved :: GNU Affero v3",
-        "Operating System :: OS Independent",
-        "Programming Language :: Python",
-        "Topic :: Software Development :: Libraries :: Python Modules",
-    ],
-)
+[project.urls]
+Homepage = "https://github.com/Scifabric/pybossa"
+
+[tool.setuptools.packages.find]
+include = ["pybossa*"]
+
+[tool.setuptools]
+include-package-data = true
