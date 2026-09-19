@@ -363,7 +363,7 @@ def setup_twitter_login(app):
 
 def setup_dropbox_importer(app):
     try:  # pragma: no cover
-        if app.config['DROPBOX_APP_KEY']:
+        if app.config.get('DROPBOX_APP_KEY'):
             importer.register_dropbox_importer()
     except Exception as inst:  # pragma: no cover
         print(type(inst))
@@ -394,7 +394,7 @@ def setup_twitter_importer(app):
 
 def setup_youtube_importer(app):
     try:  # pragma: no cover
-        if app.config['YOUTUBE_API_SERVER_KEY']:
+        if app.config.get('YOUTUBE_API_SERVER_KEY'):
             importer_params = {
                 'youtube_api_server_key': app.config['YOUTUBE_API_SERVER_KEY']
             }
