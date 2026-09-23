@@ -16,6 +16,8 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with PYBOSSA.  If not, see <http://www.gnu.org/licenses/>.
 import json
+import os
+from io import BytesIO
 from default import db, with_context
 from nose.tools import assert_equal
 from test_api import TestAPI
@@ -28,6 +30,7 @@ from pybossa.repositories import ProjectRepository
 from pybossa.repositories import TaskRepository
 from pybossa.repositories import ResultRepository
 from pybossa.model.counter import Counter
+from pybossa.model.task_import_mapping import TaskImportMapping
 
 project_repo = ProjectRepository(db)
 task_repo = TaskRepository(db)
@@ -35,6 +38,105 @@ result_repo = ResultRepository(db)
 
 
 class TestTaskAPI(TestAPI):
+
+    @with_context
+    @patch('pybossa.api.task_import.importer_queue')
+    def test_task_csv_upload_queues_import(self, queue):
+        owner = UserFactory.create()
+        project = ProjectFactory.create(owner=owner)
+        queue.enqueue.return_value.id = 'csv-import-job'
+        csv_data = b'image,quorum\nhttps://example.org/one.jpg,2\nhttps://example.org/two.jpg,3\n'
+
+        res = self.app.post(
+            '/api/task/import?api_key=%s' % owner.api_key,
+            data={'project_id': str(project.id),
+                  'file': (BytesIO(csv_data), 'tasks.csv')},
+            content_type='multipart/form-data')
+
+        assert_equal(res.status_code, 202, res.data)
+        data = json.loads(res.data)
+        assert_equal(data['status'], 'queued', data)
+        assert_equal(data['job_id'], 'csv-import-job', data)
+        args, kwargs = queue.enqueue.call_args
+        assert_equal(args[1], project.id)
+        assert_equal(kwargs['type'], 'localCSV')
+        assert_equal(kwargs['delete_csv_after_import'], True)
+        # The queued worker owns this file; remove it here because the queue
+        # is mocked and will not run during this request test.
+        os.unlink(kwargs['csv_filename'])
+
+    @with_context
+    def test_task_csv_upload_requires_owner_and_file(self):
+        owner, other = UserFactory.create_batch(2)
+        project = ProjectFactory.create(owner=owner)
+        url = '/api/task/import?api_key=%s' % other.api_key
+
+        res = self.app.post(url,
+                            data={'project_id': str(project.id),
+                                  'file': (BytesIO(b'name\none\n'),
+                                           'tasks.csv')},
+                            content_type='multipart/form-data')
+        assert_equal(res.status_code, 403, res.data)
+
+        res = self.app.post('/api/task/import?api_key=%s' % owner.api_key,
+                            data={'project_id': str(project.id)},
+                            content_type='multipart/form-data')
+        assert_equal(res.status_code, 400, res.data)
+
+    @with_context
+    @patch('pybossa.api.task_import.Job.fetch')
+    def test_task_csv_import_job_status(self, fetch):
+        owner = UserFactory.create()
+        project = ProjectFactory.create(owner=owner)
+        job = fetch.return_value
+        job.id = 'csv-import-job'
+        job.func_name = 'pybossa.jobs.import_tasks'
+        job.args = (project.id,)
+        job.kwargs = {'type': 'localCSV', 'delete_csv_after_import': True,
+                      'mapping_job_id': job.id}
+        job.get_status.return_value = 'finished'
+        job.result = '2 new tasks were imported successfully'
+
+        res = self.app.get('/api/task/import/csv-import-job?api_key=%s' %
+                           owner.api_key)
+
+        assert_equal(res.status_code, 200, res.data)
+        data = json.loads(res.data)
+        assert_equal(data['status'], 'finished', data)
+        assert_equal(data['project_id'], project.id, data)
+        assert_equal(data['message'], job.result, data)
+
+    @with_context
+    @patch('pybossa.api.task_import.Job.fetch')
+    def test_task_csv_import_task_mappings_are_cursor_paginated(self, fetch):
+        owner = UserFactory.create()
+        project = ProjectFactory.create(owner=owner)
+        tasks = TaskFactory.create_batch(2, project=project)
+        job = fetch.return_value
+        job.id = 'csv-import-job'
+        job.func_name = 'pybossa.jobs.import_tasks'
+        job.args = (project.id,)
+        job.kwargs = {'type': 'localCSV', 'delete_csv_after_import': True,
+                      'mapping_job_id': job.id}
+        job.get_status.return_value = 'finished'
+        db.session.add_all([
+            TaskImportMapping(job_id=job.id, project_id=project.id,
+                              occurrence_id='occ-one', task_id=tasks[0].id),
+            TaskImportMapping(job_id=job.id, project_id=project.id,
+                              occurrence_id='occ-two', task_id=tasks[1].id)])
+        db.session.commit()
+
+        base = '/api/task/import/%s/tasks?api_key=%s&limit=1' % (
+            job.id, owner.api_key)
+        first = json.loads(self.app.get(base).data)
+        assert_equal(first['total'], 2, first)
+        assert_equal(first['tasks'][0]['occurrence_id'], 'occ-one', first)
+        assert first['next_cursor'], first
+
+        second = json.loads(self.app.get(base + '&cursor=' +
+                                         first['next_cursor']).data)
+        assert_equal(second['tasks'][0]['occurrence_id'], 'occ-two', second)
+        assert_equal(second['next_cursor'], None, second)
 
     def create_result(self, n_results=1, n_answers=1, owner=None,
                       filter_by=False):

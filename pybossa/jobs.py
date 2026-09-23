@@ -17,9 +17,11 @@
 # along with PYBOSSA.  If not, see <http://www.gnu.org/licenses/>.
 """Jobs module for running background tasks in PYBOSSA server."""
 from datetime import datetime
+import csv
+import os
 import math
 import requests
-from flask import current_app, render_template
+from flask import current_app, render_template, has_app_context
 from flask_mail import Message
 from pybossa.core import mail, task_repo, importer, create_app
 from pybossa.model.webhook import Webhook
@@ -523,21 +525,56 @@ def send_mail(message_dict, user_id=None):
 
 def import_tasks(project_id, from_auto=False, **form_data):
     """Import tasks for a project."""
+    if not has_app_context():
+        app = create_app(run_as_server=False)
+        with app.app_context():
+            return _import_tasks(project_id, from_auto, **form_data)
+    return _import_tasks(project_id, from_auto, **form_data)
+
+
+def _import_tasks(project_id, from_auto=False, **form_data):
+    """Run an import while an application context is active."""
     from pybossa.core import project_repo
-    project = project_repo.get(project_id)
-    report = importer.create_tasks(task_repo, project_id, **form_data)
-    if from_auto:
-        form_data['last_import_meta'] = report.metadata
-        project.set_autoimporter(form_data)
-        project_repo.save(project)
-    msg = report.message + ' to your project %s!' % project.name
-    subject = 'Tasks Import to your project %s' % project.name
-    body = 'Hello,\n\n' + msg + '\n\nAll the best,\nThe %s team.'\
-        % current_app.config.get('BRAND')
-    mail_dict = dict(recipients=[project.owner.email_addr],
-                     subject=subject, body=body)
-    send_mail(mail_dict)
-    return msg
+    csv_filename = form_data.get('csv_filename')
+    delete_csv = form_data.pop('delete_csv_after_import', False)
+    mappings_csv_filename = form_data.pop('mappings_csv_filename', None)
+    mapping_job_id = form_data.get('mapping_job_id')
+    try:
+        project = project_repo.get(project_id)
+        report = importer.create_tasks(task_repo, project_id, **form_data)
+        if mappings_csv_filename and mapping_job_id:
+            _write_task_import_mappings_csv(mapping_job_id,
+                                            mappings_csv_filename)
+        if from_auto:
+            form_data['last_import_meta'] = report.metadata
+            project.set_autoimporter(form_data)
+            project_repo.save(project)
+        msg = report.message + ' to your project %s!' % project.name
+        subject = 'Tasks Import to your project %s' % project.name
+        body = 'Hello,\n\n' + msg + '\n\nAll the best,\nThe %s team.'\
+            % current_app.config.get('BRAND')
+        mail_dict = dict(recipients=[project.owner.email_addr],
+                         subject=subject, body=body)
+        send_mail(mail_dict)
+        return msg
+    finally:
+        if delete_csv and csv_filename and os.path.exists(csv_filename):
+            os.unlink(csv_filename)
+
+
+def _write_task_import_mappings_csv(job_id, filename):
+    """Materialize a completed import's mappings for one-shot download."""
+    from pybossa.model.task_import_mapping import TaskImportMapping
+    directory = os.path.dirname(filename)
+    if not os.path.isdir(directory):
+        os.makedirs(directory)
+    with open(filename, 'w', newline='', encoding='utf-8') as output:
+        writer = csv.writer(output)
+        writer.writerow(['occurrence_id', 'task_id'])
+        mappings = TaskImportMapping.query.filter_by(job_id=job_id).order_by(
+            TaskImportMapping.id).yield_per(1000)
+        for mapping in mappings:
+            writer.writerow([mapping.occurrence_id, mapping.task_id])
 
 
 def webhook(url, payload=None, oid=None, rerun=False):

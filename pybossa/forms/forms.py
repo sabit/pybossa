@@ -17,7 +17,7 @@
 # along with PYBOSSA.  If not, see <http://www.gnu.org/licenses/>.
 
 from flask import current_app
-from flask_wtf import Form
+from flask_wtf import FlaskForm
 from flask_wtf.file import FileField, FileRequired
 from wtforms import IntegerField, DecimalField, TextField, BooleanField, \
     SelectField, validators, TextAreaField, PasswordField, FieldList, SelectMultipleField
@@ -49,7 +49,7 @@ BooleanField.false_values = {False, 'false', '', 'off', 'n', 'no'}
 
 # Forms for projects view
 
-class ProjectForm(Form):
+class ProjectForm(FlaskForm):
     name = TextField(lazy_gettext('Name'),
                      [validators.Required(),
                       pb_validator.Unique(project_repo.get_by, 'name',
@@ -84,12 +84,12 @@ class ProjectUpdateForm(ProjectForm):
                         [pb_validator.Webhook()])
 
 
-class TaskPresenterForm(Form):
+class TaskPresenterForm(FlaskForm):
     id = IntegerField(label=None, widget=HiddenInput())
     editor = TextAreaField('')
 
 
-class TaskRedundancyForm(Form):
+class TaskRedundancyForm(FlaskForm):
     n_answers = IntegerField(lazy_gettext('Redundancy'),
                              [validators.Required(),
                               validators.NumberRange(
@@ -98,7 +98,7 @@ class TaskRedundancyForm(Form):
                                                        value between 1 and 1,000'))])
 
 
-class TaskPriorityForm(Form):
+class TaskPriorityForm(FlaskForm):
     task_ids = TextField(lazy_gettext('Task IDs'),
                          [validators.Required(),
                           pb_validator.CommaSeparatedIntegers()])
@@ -110,7 +110,7 @@ class TaskPriorityForm(Form):
                                                        value between 0.0 and 1.0'))])
 
 
-class TaskSchedulerForm(Form):
+class TaskSchedulerForm(FlaskForm):
     _translate_names = lambda variant: (variant[0], lazy_gettext(variant[1]))
     _choices = list(map(_translate_names, sched_variants()))
     sched = SelectField(lazy_gettext('Task Scheduler'), choices=_choices)
@@ -122,7 +122,7 @@ class TaskSchedulerForm(Form):
         cls.sched.kwargs['choices'] = _choices
 
 
-class AnnouncementForm(Form):
+class AnnouncementForm(FlaskForm):
     id = IntegerField(label=None, widget=HiddenInput())
     title = TextField(lazy_gettext('Title'),
                      [validators.Required(message=lazy_gettext(
@@ -133,7 +133,7 @@ class AnnouncementForm(Form):
     media_url = TextField(lazy_gettext('URL'))
     published = BooleanField(lazy_gettext('Publish'))
 
-class BlogpostForm(Form):
+class BlogpostForm(FlaskForm):
     id = IntegerField(label=None, widget=HiddenInput())
     title = TextField(lazy_gettext('Title'),
                      [validators.Required(message=lazy_gettext(
@@ -144,13 +144,13 @@ class BlogpostForm(Form):
     published = BooleanField(lazy_gettext('Publish'))
 
 
-class PasswordForm(Form):
+class PasswordForm(FlaskForm):
     password = PasswordField(lazy_gettext('Password'),
                         [validators.Required(message=lazy_gettext(
                                     "You must enter a password"))])
 
 
-class BulkTaskCSVImportForm(Form):
+class BulkTaskCSVImportForm(FlaskForm):
     form_name = TextField(label=None, widget=HiddenInput(), default='csv')
     msg_required = lazy_gettext("You must provide a URL")
     msg_url = lazy_gettext("Oops! That's not a valid URL. "
@@ -163,7 +163,7 @@ class BulkTaskCSVImportForm(Form):
         return {'type': 'csv', 'csv_url': self.csv_url.data}
 
 
-class BulkTaskGDImportForm(Form):
+class BulkTaskGDImportForm(FlaskForm):
     form_name = TextField(label=None, widget=HiddenInput(), default='gdocs')
     msg_required = lazy_gettext("You must provide a URL")
     msg_url = lazy_gettext("Oops! That's not a valid URL. "
@@ -176,7 +176,7 @@ class BulkTaskGDImportForm(Form):
         return {'type': 'gdocs', 'googledocs_url': self.googledocs_url.data}
 
 
-class BulkTaskEpiCollectPlusImportForm(Form):
+class BulkTaskEpiCollectPlusImportForm(FlaskForm):
     form_name = TextField(label=None, widget=HiddenInput(), default='epicollect')
     msg_required = lazy_gettext("You must provide an EpiCollect Plus "
                                 "project name")
@@ -193,7 +193,7 @@ class BulkTaskEpiCollectPlusImportForm(Form):
                 'epicollect_form': self.epicollect_form.data}
 
 
-class BulkTaskFlickrImportForm(Form):
+class BulkTaskFlickrImportForm(FlaskForm):
     form_name = TextField(label=None, widget=HiddenInput(), default='flickr')
     msg_required = lazy_gettext("You must provide a valid Flickr album ID")
     album_id = TextField(lazy_gettext('Album ID'),
@@ -202,14 +202,14 @@ class BulkTaskFlickrImportForm(Form):
         return {'type': 'flickr', 'album_id': self.album_id.data}
 
 
-class BulkTaskDropboxImportForm(Form):
+class BulkTaskDropboxImportForm(FlaskForm):
     form_name = TextField(label=None, widget=HiddenInput(), default='dropbox')
     files = FieldList(TextField(label=None, widget=HiddenInput()))
     def get_import_data(self):
         return {'type': 'dropbox', 'files': self.files.data}
 
 
-class BulkTaskTwitterImportForm(Form):
+class BulkTaskTwitterImportForm(FlaskForm):
     form_name = TextField(label=None, widget=HiddenInput(), default='twitter')
     msg_required = lazy_gettext("You must provide some source for the tweets")
     source = TextField(lazy_gettext('Source'),
@@ -225,7 +225,7 @@ class BulkTaskTwitterImportForm(Form):
         }
 
 
-class BulkTaskYoutubeImportForm(Form):
+class BulkTaskYoutubeImportForm(FlaskForm):
     form_name = TextField(label=None, widget=HiddenInput(), default='youtube')
     msg_required = lazy_gettext("You must provide a valid playlist")
     playlist_url = URLField(lazy_gettext('Playlist'),
@@ -237,7 +237,7 @@ class BulkTaskYoutubeImportForm(Form):
         }
 
 
-class BulkTaskS3ImportForm(Form):
+class BulkTaskS3ImportForm(FlaskForm):
     form_name = TextField(label=None, widget=HiddenInput(), default='s3')
     files = FieldList(TextField(label=None, widget=HiddenInput()))
     msg_required = lazy_gettext("You must provide a valid bucket")
@@ -251,7 +251,7 @@ class BulkTaskS3ImportForm(Form):
         }
 
 
-class BulkTaskLocalCSVImportForm(Form):
+class BulkTaskLocalCSVImportForm(FlaskForm):
     form_name = TextField(label=None, widget=HiddenInput(), default='localCSV')
     _allowed_extensions = set(['csv'])
     def _allowed_file(self, filename):
@@ -289,7 +289,7 @@ class BulkTaskLocalCSVImportForm(Form):
         return {'type': 'localCSV', 'csv_filename': None}
 
 
-class BulkTaskIIIFImportForm(Form):
+class BulkTaskIIIFImportForm(FlaskForm):
     form_name = TextField(label=None, widget=HiddenInput(), default='iiif')
     msg_required = lazy_gettext("You must provide a URL")
     msg_url = lazy_gettext("Oops! That's not a valid URL. "
@@ -333,7 +333,7 @@ class GenericBulkTaskImportForm(object):
 
 ### Forms for account view
 
-class LoginForm(Form):
+class LoginForm(FlaskForm):
 
     """Login Form class for signin into PYBOSSA."""
 
@@ -347,7 +347,7 @@ class LoginForm(Form):
                                      "You must provide a password"))])
 
 
-class RegisterForm(Form):
+class RegisterForm(FlaskForm):
 
     """Register Form Class for creating an account in PYBOSSA."""
 
@@ -393,7 +393,7 @@ class RegisterForm(Form):
     consent = BooleanField(false_values=("False", "false", '', '0', 0))
 
 
-class UpdateProfileForm(Form):
+class UpdateProfileForm(FlaskForm):
 
     """Form Class for updating PYBOSSA's user Profile."""
 
@@ -437,7 +437,7 @@ class UpdateProfileForm(Form):
         self.locale.choices = choices
 
 
-class ChangePasswordForm(Form):
+class ChangePasswordForm(FlaskForm):
 
     """Form for changing user's password."""
 
@@ -461,7 +461,7 @@ class ChangePasswordForm(Form):
     confirm = PasswordField(lazy_gettext('Repeat password'))
 
 
-class ResetPasswordForm(Form):
+class ResetPasswordForm(FlaskForm):
 
     """Class for resetting user's password."""
 
@@ -482,7 +482,7 @@ class ResetPasswordForm(Form):
     confirm = PasswordField(lazy_gettext('Repeat Password'))
 
 
-class ForgotPasswordForm(Form):
+class ForgotPasswordForm(FlaskForm):
 
     """Form Class for forgotten password."""
 
@@ -495,7 +495,7 @@ class ForgotPasswordForm(Form):
                             validators.Email()])
 
 
-class OTPForm(Form):
+class OTPForm(FlaskForm):
     otp = TextField(lazy_gettext('One Time Password'),
                     [validators.Required(message=lazy_gettext(
                         'You must provide a valid OTP code'))])
@@ -503,11 +503,11 @@ class OTPForm(Form):
 
 ### Forms for admin view
 
-class SearchForm(Form):
+class SearchForm(FlaskForm):
     user = TextField(lazy_gettext('User'))
 
 
-class CategoryForm(Form):
+class CategoryForm(FlaskForm):
     id = IntegerField(label=None, widget=HiddenInput())
     name = TextField(lazy_gettext('Name'),
                      [validators.Required(),
@@ -518,7 +518,7 @@ class CategoryForm(Form):
 
 
 ### Common forms
-class AvatarUploadForm(Form):
+class AvatarUploadForm(FlaskForm):
     id = IntegerField(label=None, widget=HiddenInput())
     avatar = FileField(lazy_gettext('Avatar'), validators=[FileRequired()])
     x1 = IntegerField(label=None, widget=HiddenInput(), default=0)
@@ -526,11 +526,11 @@ class AvatarUploadForm(Form):
     x2 = IntegerField(label=None, widget=HiddenInput(), default=0)
     y2 = IntegerField(label=None, widget=HiddenInput(), default=0)
 
-class TransferOwnershipForm(Form):
+class TransferOwnershipForm(FlaskForm):
     email_addr = EmailField(lazy_gettext('Email of the new owner'))
 
 
-class UserPrefMetadataForm(Form):
+class UserPrefMetadataForm(FlaskForm):
     """Form for admins to add metadata for users."""
     languages = SelectMultipleField(
                         lazy_gettext('Language(s)'),

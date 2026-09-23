@@ -46,6 +46,7 @@ import pybossa.sched as sched
 from pybossa.error import ErrorStatus
 from .global_stats import GlobalStatsAPI
 from .task import TaskAPI
+from .task_import import TaskImportAPI
 from .task_run import TaskRunAPI
 from .project import ProjectAPI
 from .announcement import AnnouncementAPI
@@ -99,6 +100,40 @@ register_api(ProjectStatsAPI, 'api_projectstats',
              '/projectstats', pk='oid', pk_type='int')
 register_api(CategoryAPI, 'api_category', '/category', pk='oid', pk_type='int')
 register_api(TaskAPI, 'api_task', '/task', pk='oid', pk_type='int')
+
+# A multipart endpoint for CSV bulk imports.  It is registered separately
+# because it does not represent a single Task resource.
+task_import_view = TaskImportAPI.as_view('api_task_import')
+task_import_view = ratelimit(limit=ratelimits.get('LIMIT'),
+                             per=ratelimits.get('PER'))(task_import_view)
+csrf.exempt(task_import_view)
+blueprint.add_url_rule('/task/import', view_func=task_import_view,
+                       methods=['POST', 'OPTIONS'])
+blueprint.add_url_rule('/task/import/<string:job_id>',
+                       view_func=task_import_view,
+                       methods=['GET', 'OPTIONS'])
+def task_import_tasks_view(job_id):
+    return TaskImportAPI().get_tasks(job_id)
+
+task_import_tasks_view = ratelimit(limit=ratelimits.get('LIMIT'),
+                                   per=ratelimits.get('PER'))(
+                                       task_import_tasks_view)
+csrf.exempt(task_import_tasks_view)
+blueprint.add_url_rule('/task/import/<string:job_id>/tasks',
+                       view_func=task_import_tasks_view,
+                       endpoint='api_task_import_tasks',
+                       methods=['GET', 'OPTIONS'])
+def task_import_download_view(job_id):
+    return TaskImportAPI().get_csv(job_id)
+
+task_import_download_view = ratelimit(limit=ratelimits.get('LIMIT'),
+                                      per=ratelimits.get('PER'))(
+                                          task_import_download_view)
+csrf.exempt(task_import_download_view)
+blueprint.add_url_rule('/task/import/<string:job_id>/tasks.csv',
+                       view_func=task_import_download_view,
+                       endpoint='api_task_import_download',
+                       methods=['GET', 'OPTIONS'])
 register_api(TaskRunAPI, 'api_taskrun', '/taskrun', pk='oid', pk_type='int')
 register_api(ResultAPI, 'api_result', '/result', pk='oid', pk_type='int')
 register_api(UserAPI, 'api_user', '/user', pk='oid', pk_type='int')

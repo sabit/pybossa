@@ -16,7 +16,10 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with PYBOSSA.  If not, see <http://www.gnu.org/licenses/>.
 
+import json
+
 from flask_babel import gettext
+from sqlalchemy.exc import SQLAlchemyError
 from .csv import BulkTaskCSVImport, BulkTaskGDImport, BulkTaskLocalCSVImport
 from .dropbox import BulkTaskDropboxImport
 from .flickr import BulkTaskFlickrImport
@@ -59,30 +62,106 @@ class Importer(object):
         self._importer_constructor_params['youtube'] = youtube_params
 
     def create_tasks(self, task_repo, project_id, **form_data):
-        """Create tasks."""
+        """Create tasks in database batches, avoiding per-row commits."""
         from pybossa.model.task import Task
-        """Create tasks from a remote source using an importer object and
-        avoiding the creation of repeated tasks"""
-        empty = True
-        n = 0
+        mapping_job_id = form_data.pop('mapping_job_id', None)
+        from pybossa.core import db
+        from pybossa.cache import projects as cached_projects
+        from pybossa.model.task_import_mapping import TaskImportMapping
+
+        if mapping_job_id:
+            # The CSV upload API validates this column.  Keep the guard here
+            # as well because mappings without a join key are unusable.
+            require_occurrence_id = True
+        else:
+            require_occurrence_id = False
+
         importer = self._create_importer_for(**form_data)
+        batch = []
+        created = 0
         for task_data in importer.tasks():
-            task = Task(project_id=project_id)
-            [setattr(task, k, v) for k, v in six.iteritems(task_data)]
-            found = task_repo.get_task_by(project_id=project_id, info=task.info)
-            if found is None:
-                task_repo.save(task)
-                n += 1
-                empty = False
-        if empty:
+            occurrence_id = task_data.pop('occurrence_id', None)
+            if require_occurrence_id and not occurrence_id:
+                raise ValueError('occurrence_id is required for import mappings')
+            batch.append((task_data, occurrence_id))
+            if len(batch) == 1000:
+                created += self._save_batch(
+                    db, Task, TaskImportMapping, project_id, batch,
+                    mapping_job_id)
+                batch = []
+        if batch:
+            created += self._save_batch(
+                db, Task, TaskImportMapping, project_id, batch,
+                mapping_job_id)
+
+        if created:
+            cached_projects.clean_project(project_id)
+        if created == 0:
             msg = gettext('It looks like there were no new records to import')
-            return ImportReport(message=msg, metadata=None, total=n)
+            return ImportReport(message=msg, metadata=None, total=created)
         metadata = importer.import_metadata()
-        msg = str(n) + " " + gettext('new tasks were imported successfully')
-        if n == 1:
-            msg = str(n) + " " + gettext('new task was imported successfully')
-        report = ImportReport(message=msg, metadata=metadata, total=n)
+        msg = str(created) + " " + gettext('new tasks were imported successfully')
+        if created == 1:
+            msg = str(created) + " " + gettext('new task was imported successfully')
+        report = ImportReport(message=msg, metadata=metadata, total=created)
         return report
+
+    @staticmethod
+    def _task_key(info):
+        """Canonical JSON key matching the existing project/info dedup rule."""
+        return json.dumps(info, sort_keys=True, separators=(',', ':'),
+                          default=str)
+
+    def _save_batch(self, db, Task, TaskImportMapping, project_id, batch,
+                    mapping_job_id):
+        """Resolve, insert, and map up to 1,000 CSV rows in one transaction."""
+        from pybossa.model.counter import Counter
+
+        rows_by_key = {}
+        for task_data, occurrence_id in batch:
+            info = task_data.get('info') or {}
+            key = self._task_key(info)
+            if key not in rows_by_key:
+                values = dict(task_data)
+                values['project_id'] = project_id
+                values['info'] = info
+                rows_by_key[key] = dict(values=values, occurrences=[])
+            rows_by_key[key]['occurrences'].append(occurrence_id)
+
+        try:
+            infos = [row['values']['info'] for row in rows_by_key.values()]
+            existing = db.session.query(Task.id, Task.info).filter(
+                Task.project_id == project_id, Task.info.in_(infos)).all()
+            task_ids = {self._task_key(info): task_id
+                        for task_id, info in existing}
+            missing = [row['values'] for key, row in rows_by_key.items()
+                       if key not in task_ids]
+            if missing:
+                inserted = db.session.execute(
+                    Task.__table__.insert().values(missing).returning(
+                        Task.id, Task.info)).fetchall()
+                task_ids.update({self._task_key(info): task_id
+                                 for task_id, info in inserted})
+                # Core bulk inserts bypass Task's after_insert listener, which
+                # normally creates this row.  Keep the counter write bulk and
+                # in the same transaction as its task rows.
+                db.session.execute(Counter.__table__.insert(), [
+                    dict(project_id=project_id, task_id=task_id,
+                         n_task_runs=0)
+                    for task_id, _ in inserted
+                ])
+            if mapping_job_id:
+                mappings = []
+                for key, row in rows_by_key.items():
+                    mappings.extend(dict(job_id=mapping_job_id,
+                        project_id=project_id, occurrence_id=str(occurrence),
+                        task_id=task_ids[key]) for occurrence in row['occurrences'])
+                db.session.execute(TaskImportMapping.__table__.insert(), mappings)
+            db.session.commit()
+            return len(missing)
+        except SQLAlchemyError:
+            db.session.rollback()
+            raise
 
     def count_tasks_to_import(self, **form_data):
         """Count tasks to import."""

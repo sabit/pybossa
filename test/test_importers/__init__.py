@@ -22,6 +22,7 @@ from default import Test, with_request_context
 from factories import ProjectFactory, TaskFactory
 from pybossa.repositories import TaskRepository
 from pybossa.core import db
+from pybossa.model.counter import Counter
 task_repo = TaskRepository(db)
 
 
@@ -45,6 +46,9 @@ class TestImporterPublicMethods(Test):
         assert task.project_id == project.id, task.project_id
         assert task.n_answers == 20, task.n_answers
         assert task.info == {'question': 'question', 'url': 'url'}, task.info
+        counter = Counter.query.filter_by(task_id=task.id,
+                                          project_id=project.id).one()
+        assert counter.n_task_runs == 0, counter.n_task_runs
         importer_factory.assert_called_with(**form_data)
         mock_importer.tasks.assert_called_with()
 

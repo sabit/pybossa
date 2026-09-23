@@ -21,7 +21,7 @@ import os
 from yacryptopan import CryptoPAn
 from datetime import timedelta, datetime
 from functools import update_wrapper
-from flask_wtf import Form
+from flask_wtf import FlaskForm
 import csv
 import codecs
 import io
@@ -91,7 +91,7 @@ def handle_content_type(data):
             data['flash'] = message_and_status[1]
             data['status'] = message_and_status[0]
         for item in list(data.keys()):
-            if isinstance(data[item], Form):
+            if isinstance(data[item], FlaskForm):
                 data[item] = form_to_json(data[item])
             if isinstance(data[item], Pagination):
                 data[item] = data[item].to_json()

@@ -45,15 +45,20 @@ class BulkTaskCSVImport(BulkTaskImport):
         """Get data from URL."""
         return self.url
 
-    def _import_csv_tasks(self, csv_df):
+    def _import_csv_tasks(self, csv_df, require_occurrence_id=False):
         """Import CSV tasks."""
         headers = []
         fields = set(['state', 'quorum', 'calibration', 'priority_0',
                       'n_answers'])
+        headers = list(csv_df.columns)
+        if require_occurrence_id:
+            if 'occurrence_id' not in headers:
+                raise BulkImportException('CSV must include an occurrence_id column')
+            fields.add('occurrence_id')
         field_header_index = []
         row_number = 0
+        occurrence_ids = set()
 
-        headers = list(csv_df.columns)
         self._check_no_duplicated_headers(headers)
         self._check_no_empty_headers(headers)
         field_headers = set(headers) & fields
@@ -70,6 +75,13 @@ class BulkTaskCSVImport(BulkTaskImport):
                     task_data[headers[idx]] = cell
                 else:
                     task_data["info"][headers[idx]] = cell
+            if require_occurrence_id and not task_data.get('occurrence_id'):
+                raise BulkImportException('occurrence_id cannot be empty')
+            if require_occurrence_id:
+                occurrence_id = str(task_data['occurrence_id'])
+                if occurrence_id in occurrence_ids:
+                    raise BulkImportException('occurrence_id values must be unique')
+                occurrence_ids.add(occurrence_id)
             yield task_data
 
     def _check_no_duplicated_headers(self, headers):
@@ -169,7 +181,9 @@ class BulkTaskLocalCSVImport(BulkTaskCSVImport):
         csvcontent = io.StringIO(csv_file.stream.read())
         csv_df = pd.read_csv(csvcontent)
         csv_df.fillna('')
-        return list(self._import_csv_tasks(csv_df))
+        return self._import_csv_tasks(
+            csv_df, require_occurrence_id=self.form_data.get(
+                'require_occurrence_id', False))
 
     def tasks(self):
         """Get tasks from a given URL."""

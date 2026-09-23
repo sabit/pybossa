@@ -19,8 +19,8 @@
 import os
 import logging
 import humanize
-from flask import Flask, url_for, request, render_template, \
-    flash, _app_ctx_stack, abort, redirect, request
+from flask import Flask, url_for, request, render_template, has_request_context, \
+    flash, _app_ctx_stack, abort, redirect, request, g
 from flask_login import current_user
 from flask_babel import gettext
 from flask_assets import Bundle
@@ -279,15 +279,19 @@ def setup_babel(app):
         locales = [l[0] for l in app.config.get('LOCALES')]
         if current_user and current_user.is_authenticated:
             lang = current_user.locale
-        else:
+        elif has_request_context():
             lang = request.cookies.get('language')
-        if (lang is None or lang == '' or
-                lang.lower() not in locales):
+        else:
+            lang = None
+        if (has_request_context() and
+                (lang is None or lang == '' or
+                 lang.lower() not in locales)):
             lang = request.accept_languages.best_match(locales)
         if (lang is None or lang == '' or
                 lang.lower() not in locales):
             lang = app.config.get('DEFAULT_LOCALE') or 'en'
-        if request.headers.get('Content-Type') == 'application/json':
+        if (has_request_context() and
+                request.headers.get('Content-Type') == 'application/json'):
             lang = 'en'
         return lang.lower()
     return babel
@@ -485,6 +489,10 @@ def setup_hooks(app):
             user = user_repo.get_by(api_key=apikey)
             if user:
                 _request_ctx_stack.top.user = user
+                # Flask-Login >= 0.6 reads the request user from ``g`` rather
+                # than ``_request_ctx_stack.top``.  Keep the latter assignment
+                # for compatibility with the versions supported by PYBOSSA.
+                g._login_user = user
         # Handle forms
         request.body = request.form
         if (request.method == 'POST' and

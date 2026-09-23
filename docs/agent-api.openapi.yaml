@@ -1,0 +1,386 @@
+openapi: 3.1.0
+info:
+  title: PYBOSSA external-agent API
+  version: 0.1.0
+  description: |
+    A deliberately small, machine-readable contract for integrations that
+    create and observe tasks, submit task runs, start CSV imports, and receive
+    task-completion webhooks. It is not a catalogue of every PYBOSSA route.
+
+    Send an API key either as `api_key` in the query string or as the raw
+    `Authorization` header. Task creation and imports require a project owner
+    or administrator key. Treat a 202 CSV-import response as accepted only;
+    use its `job_id` with the import-status endpoint until it finishes.
+  license:
+    name: AGPL-3.0-or-later
+servers:
+  - url: https://{host}
+    variables:
+      host:
+        default: pybossa.example.org
+security:
+  - ApiKeyQuery: []
+  - ApiKeyHeader: []
+paths:
+  /api/task:
+    get:
+      summary: List tasks, optionally for a project
+      operationId: listTasks
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: project_id
+          in: query
+          description: Project ID. Use this when polling an asynchronous import.
+          schema: { type: integer }
+        - name: state
+          in: query
+          schema: { type: string, enum: [ongoing, completed] }
+        - name: limit
+          in: query
+          description: Maximum returned items; the server caps this at 100.
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0, minimum: 0 }
+        - name: last_id
+          in: query
+          description: Cursor-style pagination; returns tasks after this ID.
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Tasks visible to the caller.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Task' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      summary: Create one task synchronously
+      operationId: createTask
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NewTask' }
+      responses:
+        '200':
+          description: Created task.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/task/{taskId}:
+    get:
+      summary: Fetch one task
+      operationId: getTask
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: The task.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/project/{projectId}/newtask:
+    get:
+      summary: Reserve the next available task before submitting a task run
+      description: |
+        Calling this endpoint stamps the returned task for the caller. Submit
+        the resulting task ID to `POST /api/taskrun`; a task-run submission
+        without this reservation is rejected. An empty object means that no
+        task is currently available.
+      operationId: reserveNewTask
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: projectId
+          in: path
+          required: true
+          schema: { type: integer }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 1, maximum: 100 }
+        - name: external_uid
+          in: query
+          description: |
+            External contributor identity. This mode requires the project's
+            signed Bearer JWT in `Authorization`, rather than an API key.
+          schema: { type: string }
+      responses:
+        '200':
+          description: One task, a list when limit is greater than one, or an empty object.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/Task'
+                  - type: array
+                    items: { $ref: '#/components/schemas/Task' }
+                  - type: object
+                    maxProperties: 0
+        default: { $ref: '#/components/responses/Error' }
+  /api/task/import:
+    post:
+      summary: Queue a CSV task import
+      description: |
+        Uploads a CSV and immediately enqueues the insert work on the `medium`
+        RQ queue. Use the returned `job_id` with the import-status endpoint.
+      operationId: queueTaskCsvImport
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [project_id, file]
+              properties:
+                project_id: { type: integer }
+                file:
+                  type: string
+                  format: binary
+                  description: UTF-8 CSV file; filename must end in `.csv`.
+      responses:
+        '202':
+          description: Import accepted and queued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueuedImport' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/task/import/{jobId}:
+    get:
+      summary: Read the state of a queued CSV import
+      description: |
+        Only the importing project's owner or an administrator can read a job.
+        This endpoint intentionally exposes only CSV-import jobs created via
+        `POST /api/task/import`, not arbitrary RQ jobs.
+      operationId: getTaskCsvImportStatus
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Current RQ state. A finished job includes its import message.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportStatus' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/task/import/{jobId}/tasks:
+    get:
+      summary: Page through submitted CSV rows and their resolved task IDs
+      description: |
+        Available only after the import finishes. Each submitted CSV row must
+        include a non-empty `occurrence_id`; the response maps that stable join
+        key to either the new task ID or the pre-existing deduplicated task ID.
+        Cursors are opaque and bound to this job. The server accepts up to
+        10,000 mappings per page.
+      operationId: listTaskCsvImportMappings
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 1000, minimum: 1, maximum: 10000 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: A page of resolved CSV occurrences.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportTaskMappings' }
+        default: { $ref: '#/components/responses/Error' }
+  /api/task/import/{jobId}/tasks.csv:
+    get:
+      summary: Download all completed import mappings as one CSV
+      description: |
+        Prefer this endpoint for large imports. It is written by the worker
+        after the job finishes and contains `occurrence_id,task_id` rows,
+        including deduplicated tasks. Authenticate as the project owner or an
+        administrator. Append `api_key` when using query-string authentication.
+      operationId: downloadTaskCsvImportMappings
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Complete mapping CSV.
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
+        default: { $ref: '#/components/responses/Error' }
+  /api/taskrun:
+    post:
+      summary: Submit a contribution for a previously assigned task
+      description: |
+        A task run is accepted only after the caller has been assigned that
+        task by the scheduler. Agents should not use this endpoint to create
+        arbitrary task runs.
+      operationId: createTaskRun
+      parameters:
+        - $ref: '#/components/parameters/ApiKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NewTaskRun' }
+      responses:
+        '200':
+          description: Stored contribution.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskRun' }
+        default: { $ref: '#/components/responses/Error' }
+webhooks:
+  taskCompleted:
+    post:
+      summary: Outbound task-completion notification
+      description: |
+        PYBOSSA queues this POST on its `high` RQ queue when a task completes
+        in a project configured with a webhook URL. The receiver should return
+        HTTP 200; other responses are recorded as unsuccessful.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskCompletedEvent' }
+      responses:
+        '200': { description: Event accepted. }
+components:
+  securitySchemes:
+    ApiKeyQuery:
+      type: apiKey
+      in: query
+      name: api_key
+    ApiKeyHeader:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: Raw API key, not a Bearer token.
+  parameters:
+    ApiKey:
+      name: api_key
+      in: query
+      schema: { type: string }
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema: { type: integer }
+  responses:
+    Error:
+      description: PYBOSSA error response.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    NewTask:
+      type: object
+      required: [project_id]
+      properties:
+        project_id: { type: integer }
+        info:
+          type: object
+          additionalProperties: true
+        quorum: { type: integer, minimum: 0, default: 0 }
+        calibration: { type: integer, default: 0 }
+        priority_0: { type: number, minimum: 0, maximum: 1, default: 0 }
+        n_answers: { type: integer, minimum: 1, default: 30 }
+    Task:
+      allOf:
+        - $ref: '#/components/schemas/NewTask'
+        - type: object
+          required: [id, created, state]
+          properties:
+            id: { type: integer }
+            created: { type: string }
+            state: { type: string, enum: [ongoing, completed] }
+    QueuedImport:
+      type: object
+      required: [status, job_id, project_id]
+      properties:
+        status: { type: string, const: queued }
+        job_id: { type: string }
+        project_id: { type: integer }
+    ImportStatus:
+      type: object
+      required: [job_id, project_id, status]
+      properties:
+        job_id: { type: string }
+        project_id: { type: integer }
+        status:
+          type: string
+          description: RQ state, such as queued, started, finished, or failed.
+        message: { type: string }
+        mappings_csv_url:
+          type: string
+          description: Present when a finished import's downloadable CSV is ready.
+    ImportTaskMappings:
+      type: object
+      required: [job_id, project_id, status, total, next_cursor, tasks]
+      properties:
+        job_id: { type: string }
+        project_id: { type: integer }
+        status: { type: string, const: finished }
+        total: { type: integer }
+        next_cursor: { type: [string, 'null'] }
+        tasks:
+          type: array
+          items:
+            type: object
+            required: [occurrence_id, task_id]
+            properties:
+              occurrence_id: { type: string }
+              task_id: { type: integer, minimum: 1 }
+    NewTaskRun:
+      type: object
+      required: [project_id, task_id, info]
+      properties:
+        project_id: { type: integer }
+        task_id: { type: integer }
+        info:
+          type: object
+          additionalProperties: true
+        external_uid: { type: string }
+    TaskRun:
+      allOf:
+        - $ref: '#/components/schemas/NewTaskRun'
+        - type: object
+          properties:
+            id: { type: integer }
+            created: { type: string }
+    TaskCompletedEvent:
+      type: object
+      required: [event, project_short_name, project_id, task_id, result_id, fired_at]
+      properties:
+        event: { type: string, const: task_completed }
+        project_short_name: { type: string }
+        project_id: { type: integer }
+        task_id: { type: integer }
+        result_id: { type: integer }
+        fired_at: { type: string, description: UTC timestamp, example: '2026-09-22 12:34:56' }
+    Error:
+      type: object
+      required: [status, status_code, target, action, exception_cls, exception_msg]
+      properties:
+        status: { type: string, const: failed }
+        status_code: { type: integer }
+        target: { type: string }
+        action: { type: string }
+        exception_cls: { type: string }
+        exception_msg: { type: string }
