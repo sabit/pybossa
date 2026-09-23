@@ -58,6 +58,7 @@ from .result import ResultAPI
 from .project_stats import ProjectStatsAPI
 from .helpingmaterial import HelpingMaterialAPI
 from .page import PageAPI
+from .login import login as local_account_login, prevent_login_caching
 from pybossa.core import project_repo, task_repo
 from pybossa.contributions_guard import ContributionsGuard
 from pybossa.auth import jwt_authorize_project
@@ -66,6 +67,12 @@ from werkzeug.exceptions import MethodNotAllowed
 blueprint = Blueprint('api', __name__)
 
 error = ErrorStatus()
+
+csrf.exempt(local_account_login)
+blueprint.add_url_rule('/auth/login', endpoint='api_login',
+                       view_func=local_account_login,
+                       methods=['POST'])
+blueprint.after_request(prevent_login_caching)
 
 
 @blueprint.route('/')

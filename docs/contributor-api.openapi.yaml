@@ -1,0 +1,561 @@
+openapi: 3.1.0
+info:
+  title: PYBOSSA native contributor client API
+  version: 1.1.1
+  description: |
+    Contract for a native client configured for one PROJECT_ID, using provisioned
+    local accounts. POST /api/auth/login returns the existing API key without
+    cookies or CSRF. LDAP and two-factor authentication are unsupported there.
+    See contributor-api.md for sequencing, deployment settings, and retries.
+    Legacy account recovery/profile JSON requests require exactly Content-Type
+    application/json even on GET. Recovery uses cookies and form.csrf in
+    X-CSRFToken on POST. Task payload schemas are intentionally unrestricted.
+    Credentials are installation-wide, not project-scoped.
+    Signup is outside this contract. Login returns the key directly; profile
+    checks and legacy password recovery are optional supporting flows.
+tags:
+  - name: Login
+    description: Local password verification and direct API key retrieval.
+  - name: Contributions
+    description: Task assignment, answer submission, and contributor progress.
+  - name: Optional account flows
+    description: Existing profile checks and cookie/CSRF-based password recovery.
+servers:
+  - url: https://{host}
+    variables:
+      host:
+        default: pybossa.example.org
+security:
+  - ContributorKey: []
+  - SessionCookie: []
+paths:
+  /api/auth/login:
+    post:
+      operationId: loginLocalAccount
+      tags: [Login]
+      summary: Verify a provisioned local account and retrieve its existing API key
+      description: |
+        No CSRF token, form fetch, or cookie session is required or created.
+        Password verification is mandatory even with ambient cookies/API keys.
+        Standard JSON charset parameters are accepted. Does not rotate the key.
+        LDAP or two-factor authentication enabled on the deployment yields 403.
+        Email-confirmation settings alone do not disable existing-account login.
+        Rate limiting runs before validation and can return 429 for any attempt.
+        No separate profile/key-fetch request is needed after successful login.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            example: { email_addr: contributor@example.org, password: example-password }
+      responses:
+        '200':
+          description: Identity and existing installation-wide API key.
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+            X-RateLimit-Limit: { $ref: '#/components/headers/RateLimit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/RateRemaining' }
+            X-RateLimit-Reset: { $ref: '#/components/headers/RateReset' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+              example:
+                user:
+                  id: 7
+                  name: example_contributor
+                  fullname: Example Contributor
+                  email_addr: contributor@example.org
+                api_key: existing-user-api-key
+        '400':
+          description: Malformed/non-object JSON or invalid credential fields.
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginError' }
+              examples:
+                invalidJson:
+                  value: { error: { code: invalid_json, message: The request body must be a valid JSON object. } }
+                invalidFields:
+                  value:
+                    error:
+                      code: validation_failed
+                      message: Please correct the supplied fields.
+                      fields: { email_addr: [A nonempty string is required.] }
+        '401':
+          description: Unknown account, incorrect password, or account without a local password.
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginError' }
+              example: { error: { code: invalid_credentials, message: Invalid email or password. } }
+        '403':
+          description: LDAP or two-factor authentication is enabled.
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginError' }
+              example:
+                error:
+                  code: unsupported_auth_mode
+                  message: This endpoint requires local password login without two-factor authentication.
+        '415':
+          description: Request does not have a JSON content type.
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginError' }
+              example: { error: { code: unsupported_media_type, message: Content-Type must be application/json. } }
+        '429':
+          description: Configured API endpoint/IP rate limit reached.
+          headers:
+            Cache-Control: { $ref: '#/components/headers/NoStore' }
+            X-RateLimit-Limit: { $ref: '#/components/headers/RateLimit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/RateRemaining' }
+            X-RateLimit-Reset: { $ref: '#/components/headers/RateReset' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginError' }
+              example: { error: { code: rate_limited, message: Too many login attempts. } }
+        default: { $ref: '#/components/responses/Failure' }
+  /account/profile:
+    get:
+      operationId: getOwnProfile
+      tags: [Optional account flows]
+      summary: Optionally verify a previously stored API key and identity
+      description: |
+        Use the raw API key to verify a previously stored identity. Anonymous callers receive 200 with status not_signed_in.
+        Ignore unrelated profile fields and never log the response.
+      parameters:
+        - $ref: '#/components/parameters/JsonContentType'
+      responses:
+        '200':
+          description: Own profile or unauthenticated navigation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountEnvelope' }
+              examples:
+                authenticated:
+                  value:
+                    template: account/profile.html
+                    user: { id: 7, name: example_contributor, api_key: example-contributor-key }
+                    can_update: true
+                anonymous:
+                  value: { next: /account/signin, status: not_signed_in }
+        default: { $ref: '#/components/responses/Failure' }
+  /account/forgot-password:
+    get:
+      operationId: getRecoveryForm
+      tags: [Optional account flows]
+      summary: Get password recovery form and CSRF token
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/JsonContentType'
+      responses:
+        '200': { $ref: '#/components/responses/Account' }
+        default: { $ref: '#/components/responses/Failure' }
+    post:
+      operationId: requestPasswordRecovery
+      tags: [Optional account flows]
+      summary: Queue a password recovery email
+      description: Reuse form cookies. Success and unknown email can both return HTTP 200.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Csrf'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email_addr]
+              properties:
+                email_addr: { type: string, minLength: 3, maxLength: 254 }
+            example: { email_addr: contributor@example.org }
+      responses:
+        '200': { $ref: '#/components/responses/Account' }
+        default: { $ref: '#/components/responses/Failure' }
+  /account/reset-password:
+    parameters:
+      - $ref: '#/components/parameters/LinkKey'
+    get:
+      operationId: getPasswordResetForm
+      tags: [Optional account flows]
+      summary: Open an emailed recovery link for a reset form and CSRF token
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/JsonContentType'
+      responses:
+        '200': { $ref: '#/components/responses/Account' }
+        default: { $ref: '#/components/responses/Failure' }
+    post:
+      operationId: resetPassword
+      tags: [Optional account flows]
+      summary: Change password and sign in using an emailed recovery key
+      description: Reuse form cookies. Does not rotate the API key. Invalid keys can return 403.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Csrf'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_password, confirm]
+              properties:
+                new_password: { type: string, minLength: 1, writeOnly: true }
+                confirm: { type: string, writeOnly: true, description: Must match new_password. }
+            example: { new_password: example-new-password, confirm: example-new-password }
+      responses:
+        '200': { $ref: '#/components/responses/Account' }
+        default: { $ref: '#/components/responses/Failure' }
+  /api/project/{projectId}/newtask:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: requestTask
+      tags: [Contributions]
+      summary: Request the next task for the configured project
+      description: |
+        This client omits limit and requests one task. The caller/task stamp
+        lasts 3600 seconds; scheduler locks may expire sooner. Not generally
+        exclusive. Reject task-shaped info.error responses or missing/null IDs.
+        Invalid credentials can fall back to anonymous access; verify identity.
+      responses:
+        '200':
+          description: Task, empty object, or task-shaped anonymous-access error.
+          headers:
+            X-RateLimit-Limit: { $ref: '#/components/headers/RateLimit' }
+            X-RateLimit-Remaining: { $ref: '#/components/headers/RateRemaining' }
+            X-RateLimit-Reset: { $ref: '#/components/headers/RateReset' }
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/Task'
+                  - type: object
+                    maxProperties: 0
+                  - $ref: '#/components/schemas/AssignmentError'
+              examples:
+                task:
+                  value: { id: 1001, project_id: 42, state: ongoing, info: { asset_url: 'https://assets.example.org/item.jpg' }, n_answers: 30 }
+                empty:
+                  value: {}
+        default: { $ref: '#/components/responses/Failure' }
+  /api/taskrun:
+    get:
+      operationId: findOwnSubmission
+      tags: [Contributions]
+      summary: Reconcile a pending submission using contributor, project, and task IDs
+      description: |
+        These filters are required by this client contract, not by the backend.
+        all=1 removes the default project-owner filter for non-owner contributors.
+        Returns an array. Does not establish an assignment or prove a pending
+        POST has finished. Verify the returned identity and answer.
+      parameters:
+        - name: all
+          in: query
+          required: true
+          description: Remove the default owner filter; retain the other explicit filters.
+          schema: { type: string, const: '1' }
+        - name: project_id
+          in: query
+          required: true
+          schema: { type: integer }
+        - name: task_id
+          in: query
+          required: true
+          schema: { type: integer }
+        - name: user_id
+          in: query
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Matching stored task runs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/TaskRun' }
+              example: []
+        default: { $ref: '#/components/responses/Failure' }
+    post:
+      operationId: submitAnswer
+      tags: [Contributions]
+      summary: Save a contribution for a previously requested task
+      description: |
+        CSRF-exempt. Use the same authenticated identity as requestTask. Stamp,
+        project/task relationship, locks, and duplicate rules are checked, but
+        info has no project schema validation. The stamp may be consumed even
+        on failed POSTs. No idempotency-key support. Reconcile lost responses
+        before retrying. Reserved id/created/finish_time fields yield 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Submission' }
+            example: { project_id: 42, task_id: 1001, info: { label: example-label } }
+      responses:
+        '200':
+          description: Stored contribution, not necessarily a completed task.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskRun' }
+              example:
+                id: 501
+                project_id: 42
+                task_id: 1001
+                user_id: 7
+                info: { label: example-label }
+                created: '2026-09-23T10:00:00'
+                finish_time: '2026-09-23T10:00:15'
+        default: { $ref: '#/components/responses/Failure' }
+  /api/project/{projectId}/userprogress:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      operationId: getContributorProgress
+      tags: [Contributions]
+      summary: Read the caller's contribution count and project task count
+      description: Does not guarantee remaining task availability or validate authentication by itself.
+      responses:
+        '200':
+          description: Current caller progress.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [done, total]
+                properties:
+                  done: { type: integer, description: Caller task-run count. }
+                  total: { type: integer, description: Project task count. }
+              example: { done: 12, total: 100 }
+        default: { $ref: '#/components/responses/Failure' }
+components:
+  securitySchemes:
+    ContributorKey:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: Raw contributor API key, without Bearer prefix. Not project-scoped.
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+      description: Default cookie name; retain all server cookies and confirm deployment settings.
+  parameters:
+    JsonContentType:
+      name: Content-Type
+      in: header
+      required: true
+      description: |
+        Set exactly application/json even for GET. OpenAPI tooling may ignore
+        Content-Type header parameters; explicitly configure the HTTP client.
+      schema: { type: string, const: application/json }
+    Csrf:
+      name: X-CSRFToken
+      in: header
+      required: true
+      description: form.csrf from a form GET using the same cookie jar.
+      schema: { type: string }
+    LinkKey:
+      name: key
+      in: query
+      required: true
+      description: Opaque, URL-encoded key from the emailed link.
+      schema: { type: string }
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      description: Configured PROJECT_ID; examples use 42.
+      schema: { type: integer }
+  headers:
+    NoStore:
+      description: Prevent storage of credential responses.
+      schema: { type: string, const: no-store }
+    RateLimit:
+      description: Configured endpoint/IP limit when available.
+      schema: { type: integer }
+    RateRemaining:
+      description: Remaining requests in this rate-limit window.
+      schema: { type: integer }
+    RateReset:
+      description: Window reset time as Unix epoch seconds.
+      schema: { type: integer }
+  responses:
+    Account:
+      description: |
+        Legacy recovery form or navigation response. Inspect the body;
+        validation failures may also return 200. Cookies may
+        be set or updated. Extra presentation/form fields are returned.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/AccountEnvelope' }
+          examples:
+            form:
+              value: { form: { csrf: example-csrf-token, errors: {} } }
+            navigation:
+              value: { next: /, status: success, flash: Example success message }
+    Failure:
+      description: |
+        Error status (400, 401, 403, 404, 405, 415, 429, or 500 as applicable).
+        API errors usually use ApiError; account/global errors can use a
+        different JSON envelope or HTML. See guide for retry handling.
+      headers:
+        X-RateLimit-Limit: { $ref: '#/components/headers/RateLimit' }
+        X-RateLimit-Remaining: { $ref: '#/components/headers/RateRemaining' }
+        X-RateLimit-Reset: { $ref: '#/components/headers/RateReset' }
+      content:
+        application/json:
+          schema:
+            anyOf:
+              - $ref: '#/components/schemas/ApiError'
+              - $ref: '#/components/schemas/AccountEnvelope'
+          example:
+            status: failed
+            status_code: 403
+            target: taskrun
+            action: POST
+            exception_cls: Forbidden
+            exception_msg: You must request a task first!
+        text/html:
+          schema: { type: string }
+  schemas:
+    LoginRequest:
+      type: object
+      description: Values are used as supplied without trimming or normalization. Additional fields are ignored.
+      additionalProperties: true
+      required: [email_addr, password]
+      properties:
+        email_addr: { type: string, minLength: 1, description: Provisioned local account email; the legacy email field is not accepted as an alias. }
+        password: { type: string, minLength: 1, writeOnly: true }
+    LoginResponse:
+      type: object
+      required: [user, api_key]
+      additionalProperties: false
+      properties:
+        user:
+          type: object
+          required: [id, name, fullname, email_addr]
+          additionalProperties: false
+          properties:
+            id: { type: integer }
+            name: { type: string }
+            fullname: { type: [string, 'null'] }
+            email_addr: { type: string }
+        api_key: { type: string, description: Existing private API key; not rotated by login. }
+    LoginError:
+      type: object
+      required: [error]
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+              enum: [invalid_json, validation_failed, invalid_credentials, unsupported_auth_mode, unsupported_media_type, rate_limited]
+            message: { type: string }
+            fields:
+              type: object
+              additionalProperties:
+                type: array
+                items: { type: string }
+    AccountEnvelope:
+      type: object
+      additionalProperties: true
+      properties:
+        next: { type: string }
+        status: { type: string }
+        flash: { type: string }
+        template: { type: string }
+        title: { type: string }
+        code: { type: integer }
+        description: { type: string }
+        can_update: { type: boolean }
+        form:
+          type: [object, 'null']
+          additionalProperties: true
+          properties:
+            csrf: { type: string }
+            errors:
+              type: object
+              additionalProperties: true
+        user:
+          type: [object, 'null']
+          additionalProperties: true
+          properties:
+            id: { type: integer }
+            name: { type: string }
+            email_addr: { type: string }
+            api_key: { type: string, description: Private contributor credential. }
+    TaskInfo:
+      description: Any JSON value. Project task-input schema is a placeholder; no backend schema validation.
+    AnswerInfo:
+      description: Any JSON value including null. Agree project answer fields before shipping the built-in UI.
+    Task:
+      type: object
+      required: [id, project_id, info]
+      additionalProperties: true
+      properties:
+        id: { type: integer }
+        project_id: { type: integer }
+        info: { $ref: '#/components/schemas/TaskInfo' }
+        state: { type: string }
+        created: { type: [string, 'null'], description: UTC text; timezone suffix is not guaranteed. }
+        n_answers: { type: [integer, 'null'] }
+    AssignmentError:
+      type: object
+      required: [info]
+      additionalProperties: true
+      properties:
+        id: { type: 'null' }
+        project_id: { type: 'null' }
+        info:
+          type: object
+          required: [error]
+          properties:
+            error: { type: string }
+    Submission:
+      type: object
+      description: |
+        The client always sends these three fields. Backend info is nullable
+        and not explicitly required; this schema does not invent that check.
+        Other model fields are outside this client contract.
+      required: [project_id, task_id]
+      properties:
+        project_id: { type: integer }
+        task_id: { type: integer }
+        info: { $ref: '#/components/schemas/AnswerInfo' }
+    TaskRun:
+      type: object
+      required: [id, project_id, task_id, info]
+      additionalProperties: true
+      properties:
+        id: { type: integer }
+        project_id: { type: integer }
+        task_id: { type: integer }
+        user_id: { type: [integer, 'null'], description: Must match the contributor in this client flow. }
+        user_ip: { type: [string, 'null'] }
+        info: { $ref: '#/components/schemas/AnswerInfo' }
+        created: { type: [string, 'null'], description: Request time as UTC text. }
+        finish_time: { type: [string, 'null'], description: Save time as UTC text. }
+    ApiError:
+      type: object
+      required: [status, status_code, target, action, exception_cls, exception_msg]
+      properties:
+        status: { type: string, const: failed }
+        status_code: { type: integer }
+        target: { type: string }
+        action: { type: string }
+        exception_cls: { type: string }
+        exception_msg: { type: string }

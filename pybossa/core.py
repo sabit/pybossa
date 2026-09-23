@@ -481,6 +481,10 @@ def setup_hooks(app):
     @app.before_request
     def _api_authentication():
         """ Attempt API authentication on a per-request basis."""
+        if request.endpoint == 'api.api_login':
+            # This endpoint verifies body credentials itself and parses JSON
+            # without the legacy account-form conversion (including errors).
+            return
         apikey = request.args.get('api_key', None)
         from flask import _request_ctx_stack
         if 'Authorization' in request.headers:
